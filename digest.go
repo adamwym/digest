@@ -44,15 +44,15 @@
 package digest
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"strings"
-	"io/ioutil"
-	"bytes"
 )
 
 var (
@@ -118,7 +118,6 @@ func parseChallenge(input string) (*challenge, error) {
 		case "algorithm":
 			c.Algorithm = strings.Trim(r[1], qs)
 		case "qop":
-			//TODO(gavaletz) should be an array of strings?
 			c.Qop = strings.Trim(r[1], qs)
 		default:
 			return nil, ErrBadChallenge
@@ -161,7 +160,8 @@ func (c *credentials) ha2() string {
 
 func (c *credentials) resp(cnonce string) (string, error) {
 	c.NonceCount++
-	if c.MessageQop == "auth" {
+	hash1 := c.ha1()
+	if c.MessageQop == "auth" || (strings.Contains(c.MessageQop, "auth") && c.MessageQop != "auth-int") {
 		if cnonce != "" {
 			c.Cnonce = cnonce
 		} else {
@@ -169,10 +169,10 @@ func (c *credentials) resp(cnonce string) (string, error) {
 			io.ReadFull(rand.Reader, b)
 			c.Cnonce = fmt.Sprintf("%x", b)[:16]
 		}
-		return kd(c.ha1(), fmt.Sprintf("%s:%08x:%s:%s:%s",
+		return kd(hash1, fmt.Sprintf("%s:%08x:%s:%s:%s",
 			c.Nonce, c.NonceCount, c.Cnonce, c.MessageQop, c.ha2())), nil
 	} else if c.MessageQop == "" {
-		return kd(c.ha1(), fmt.Sprintf("%s:%s", c.Nonce, c.ha2())), nil
+		return kd(hash1, fmt.Sprintf("%s:%s", c.Nonce, c.ha2())), nil
 	}
 	return "", ErrAlgNotImplemented
 }
@@ -185,7 +185,7 @@ func (c *credentials) authorize() (string, error) {
 	}
 	// Note that this is NOT implemented for "qop=auth-int".  Similarly the
 	// auth-int server side implementations that do exist are a mess.
-	if c.MessageQop != "auth" && c.MessageQop != "" {
+	if c.MessageQop == "auth-int" {
 		return "", ErrAlgNotImplemented
 	}
 	resp, err := c.resp("")
@@ -219,7 +219,7 @@ func (t *Transport) newCredentials(req *http.Request, c *challenge) *credentials
 		DigestURI:  req.URL.RequestURI(),
 		Algorithm:  c.Algorithm,
 		Opaque:     c.Opaque,
-		MessageQop: c.Qop, // "auth" must be a single value
+		MessageQop: c.Qop,
 		NonceCount: 0,
 		method:     req.Method,
 		password:   t.Password,
